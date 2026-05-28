@@ -460,7 +460,11 @@ resource "aws_cloudtrail" "this" {
   s3_bucket_name                = module.cloudtrail_bucket.bucket_id
   enable_log_file_validation    = true
   include_global_service_events = true
-  is_multi_region_trail         = false
+  # Prod logs every region so events from accidentally-created resources in
+  # unused regions are still captured. Dev stays single-region to keep costs
+  # near zero (first management-events trail per region is free, additional
+  # regions only add events from API calls actually made there).
+  is_multi_region_trail = true
 
   tags = {
     Project     = local.project

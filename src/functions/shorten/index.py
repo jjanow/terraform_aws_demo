@@ -1,8 +1,8 @@
+import ipaddress
 import json
 import os
 import secrets
 import string
-import time
 from datetime import datetime, timezone, timedelta
 from urllib.parse import urlparse
 
@@ -43,6 +43,23 @@ def _generate_code() -> str:
             return filtered[:_CODE_LENGTH]
 
 
+def _is_blocked_host(hostname: str) -> bool:
+    # Block any hostname that resolves syntactically to a private, loopback, or
+    # link-local address. 169.254.169.254 (EC2 instance metadata service) falls
+    # under link-local; blocking it stops SSRF from inside the Lambda VPC if one
+    # is ever attached later.
+    if not hostname:
+        return True
+    hostname = hostname.strip().lower().rstrip(".")
+    if hostname in ("localhost", "metadata.google.internal", "metadata.goog"):
+        return True
+    try:
+        ip = ipaddress.ip_address(hostname)
+        return ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved or ip.is_multicast
+    except ValueError:
+        return False
+
+
 def _validate_url(url: str) -> bool:
     if len(url) > 2048:
         return False
@@ -50,9 +67,17 @@ def _validate_url(url: str) -> bool:
         return False
     try:
         parsed = urlparse(url)
-        return parsed.scheme in ("http", "https") and bool(parsed.netloc)
     except Exception:
         return False
+    if parsed.scheme not in ("http", "https") or not parsed.hostname:
+        return False
+    # Userinfo (user:pass@host) is rejected — embedding credentials in shortened
+    # URLs is overwhelmingly used for phishing.
+    if parsed.username or parsed.password or "@" in (parsed.netloc or ""):
+        return False
+    if _is_blocked_host(parsed.hostname):
+        return False
+    return True
 
 
 def handler(event, context):

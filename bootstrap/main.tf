@@ -81,6 +81,87 @@ resource "aws_s3_bucket_logging" "state" {
   target_prefix = "state-bucket/"
 }
 
+# Versioning is on for safe state rollback, but without expiry old object
+# versions accumulate forever. Expire noncurrent versions after 90 days and
+# clean up failed multipart uploads after 7.
+resource "aws_s3_bucket_lifecycle_configuration" "state" {
+  bucket = aws_s3_bucket.state.id
+
+  rule {
+    id     = "expire-old-state-versions"
+    status = "Enabled"
+
+    filter {}
+
+    noncurrent_version_expiration {
+      noncurrent_days = 90
+    }
+
+    abort_incomplete_multipart_upload {
+      days_after_initiation = 7
+    }
+  }
+}
+
+# Enforce TLS on every request to the state and log buckets. Without this,
+# Terraform plan/apply traffic could be downgraded to plaintext if a future
+# client misconfiguration drops https://.
+data "aws_iam_policy_document" "state_tls_only" {
+  statement {
+    sid     = "DenyInsecureTransport"
+    effect  = "Deny"
+    actions = ["s3:*"]
+    resources = [
+      aws_s3_bucket.state.arn,
+      "${aws_s3_bucket.state.arn}/*",
+    ]
+
+    principals {
+      type        = "AWS"
+      identifiers = ["*"]
+    }
+
+    condition {
+      test     = "Bool"
+      variable = "aws:SecureTransport"
+      values   = ["false"]
+    }
+  }
+}
+
+resource "aws_s3_bucket_policy" "state_tls_only" {
+  bucket = aws_s3_bucket.state.id
+  policy = data.aws_iam_policy_document.state_tls_only.json
+}
+
+data "aws_iam_policy_document" "log_tls_only" {
+  statement {
+    sid     = "DenyInsecureTransport"
+    effect  = "Deny"
+    actions = ["s3:*"]
+    resources = [
+      aws_s3_bucket.log.arn,
+      "${aws_s3_bucket.log.arn}/*",
+    ]
+
+    principals {
+      type        = "AWS"
+      identifiers = ["*"]
+    }
+
+    condition {
+      test     = "Bool"
+      variable = "aws:SecureTransport"
+      values   = ["false"]
+    }
+  }
+}
+
+resource "aws_s3_bucket_policy" "log_tls_only" {
+  bucket = aws_s3_bucket.log.id
+  policy = data.aws_iam_policy_document.log_tls_only.json
+}
+
 # ── DynamoDB lock table ───────────────────────────────────────────────────────
 
 resource "aws_dynamodb_table" "lock" {
