@@ -1,11 +1,13 @@
 name: Terraform Plan
 
 on:
-  pull_request:
-    branches: [main]
-    paths:
-      - "**.tf"
-      - "src/**"
+  # CI temporarily disabled. Re-enable automatic PR checks by restoring:
+  # pull_request:
+  #   branches: [main]
+  #   paths:
+  #     - "**.tf"
+  #     - "src/**"
+  workflow_dispatch:
 
 # Prevent concurrent plan runs against the same branch; cancel stale runs.
 concurrency:

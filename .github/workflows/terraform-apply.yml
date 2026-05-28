@@ -1,11 +1,13 @@
 name: Terraform Apply
 
 on:
-  push:
-    branches: [main]
-    paths:
-      - "**.tf"
-      - "src/**"
+  # CI temporarily disabled. Re-enable automatic apply by restoring:
+  # push:
+  #   branches: [main]
+  #   paths:
+  #     - "**.tf"
+  #     - "src/**"
+  workflow_dispatch:
 
 # Only one apply may run at a time; queue rather than cancel so no push is skipped.
 concurrency:
