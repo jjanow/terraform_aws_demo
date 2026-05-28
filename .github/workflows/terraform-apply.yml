@@ -1,0 +1,88 @@
+name: Terraform Apply
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "**.tf"
+      - "src/**"
+
+# Only one apply may run at a time; queue rather than cancel so no push is skipped.
+concurrency:
+  group: terraform-apply-prod
+  cancel-in-progress: false
+
+jobs:
+  # ── Apply to prod (requires environment approval gate) ───────────────────────
+  apply:
+    name: Apply (prod)
+    runs-on: ubuntu-latest
+
+    # The "production" GitHub environment triggers the manual-approval gate
+    # configured under Settings → Environments → production → Required reviewers.
+    environment: production
+
+    permissions:
+      id-token: write  # required for OIDC credential exchange
+      contents: read
+
+    env:
+      TF_IN_AUTOMATION: "true"
+      TF_CLI_ARGS: "-no-color"
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@b9cd54a3c349d3f38e8881555d616ced269862dd # v3.1.2
+        with:
+          terraform_version: "~1.5"
+          # Expose raw terraform output (not wrapped by the action) so we can
+          # capture `terraform output` values in later steps.
+          terraform_wrapper: false
+
+      - name: Configure AWS Credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@e3dd6a429d7300a6a4c196c26e071d42e0343502 # v4.0.2
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: us-east-1
+          role-session-name: GitHubActions-Apply-${{ github.run_id }}
+
+      # Override the ACCOUNT_ID placeholder in environments/prod/backend.tf.
+      # TF_STATE_BUCKET must be set as a repository secret (value from
+      # `terraform output state_bucket_name` in bootstrap/).
+      - name: Terraform Init
+        working-directory: environments/prod
+        run: |
+          terraform init \
+            -backend-config="bucket=${{ secrets.TF_STATE_BUCKET }}"
+
+      - name: Terraform Plan
+        working-directory: environments/prod
+        run: terraform plan -out=tfplan
+
+      # Applying the saved plan file skips the interactive approval prompt and
+      # applies exactly what was planned in the previous step.
+      - name: Terraform Apply
+        working-directory: environments/prod
+        run: terraform apply -auto-approve tfplan
+
+      - name: Output Deployment Summary
+        working-directory: environments/prod
+        run: |
+          CF_DOMAIN=$(terraform output -raw cloudfront_domain_name 2>/dev/null || echo "unavailable")
+          CF_ID=$(terraform output -raw cloudfront_distribution_id 2>/dev/null || echo "unavailable")
+          API_URL=$(terraform output -raw api_gateway_url 2>/dev/null || echo "unavailable")
+
+          {
+            echo "## Deployment Complete — \`prod\`"
+            echo ""
+            echo "| Resource | Value |"
+            echo "| -------- | ----- |"
+            echo "| CloudFront URL | https://${CF_DOMAIN} |"
+            echo "| CloudFront Distribution | \`${CF_ID}\` |"
+            echo "| API Gateway | ${API_URL} |"
+            echo "| Commit | \`${{ github.sha }}\` |"
+            echo "| Workflow run | [${{ github.run_id }}](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}) |"
+          } >> "$GITHUB_STEP_SUMMARY"
